@@ -370,7 +370,10 @@ async def waha_webhook(request: Request):
         message_data = payload.get("payload", {})
 
         # Try different field names for chat ID
-        chat_id = message_data.get("from") or message_data.get("chatId") or message_data.get("key", {}).get("remoteJid")
+        # Prefer remoteJidAlt (standard format) over @lid format
+        _data = message_data.get("_data", {})
+        key_data = _data.get("key", {})
+        chat_id = key_data.get("remoteJidAlt") or key_data.get("remoteJid") or message_data.get("from") or message_data.get("chatId")
 
         # Try different field names for message body
         message_body = message_data.get("body") or message_data.get("text") or ""
