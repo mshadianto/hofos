@@ -4,13 +4,18 @@ Honda Freed Superchatbot - Main API Entry Point
 FastAPI application with routing to diagnostic and modification agents
 """
 import re
-from fastapi import FastAPI, HTTPException, Header
+import httpx
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional, Any
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+WAHA_URL = os.getenv("WAHA_URL")
+WAHA_API_KEY = os.getenv("WAHA_API_KEY")
 
 app = FastAPI(
     title="Honda Freed Superchatbot API",
@@ -281,6 +286,88 @@ async def get_parts(category: str = None, stage: int = None):
         return {"parts": result.data, "count": len(result.data)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def send_waha_message(chat_id: str, text: str, session: str = "hofos"):
+    """Send message back via WAHA API"""
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{WAHA_URL}/api/sendText",
+            headers={"X-Api-Key": WAHA_API_KEY},
+            json={
+                "session": session,
+                "chatId": chat_id,
+                "text": text
+            },
+            timeout=30.0
+        )
+        return response.json()
+
+
+def process_message_sync(user_id: str, message: str) -> str:
+    """Process message and return response (sync version for webhook)"""
+    if not message or not message.strip():
+        return "Silakan ketik pesan Anda."
+
+    intent = detect_intent(message)
+
+    try:
+        if intent == "greeting":
+            return get_greeting_response()
+        elif intent == "help":
+            return get_help_response()
+        elif intent == "bengkel":
+            return get_workshop_response(message)
+        elif intent == "modification" or intent == "stage":
+            from agents.freed_modification import process_modification_request
+            return process_modification_request(user_id, message)
+        else:
+            from agents.freed_diagnostic import process_freed_message
+            return process_freed_message(user_id, message)
+    except Exception as e:
+        return f"⚠️ *TERJADI KESALAHAN*\n\nError: {str(e)[:100]}\n\nKetik *HELP* untuk panduan."
+
+
+@app.post("/webhook")
+async def waha_webhook(request: Request):
+    """
+    Webhook endpoint for WAHA WhatsApp messages
+    Receives message, processes it, sends reply back via WAHA
+    """
+    try:
+        payload = await request.json()
+
+        # Check if it's a message event
+        event = payload.get("event")
+        if event != "message":
+            return {"status": "ignored", "reason": f"event type: {event}"}
+
+        # Extract message data
+        message_data = payload.get("payload", {})
+        chat_id = message_data.get("from")
+        message_body = message_data.get("body", "")
+        is_from_me = message_data.get("fromMe", False)
+        session = payload.get("session", "hofos")
+
+        # Skip messages from self
+        if is_from_me:
+            return {"status": "ignored", "reason": "message from self"}
+
+        # Skip empty messages
+        if not message_body:
+            return {"status": "ignored", "reason": "empty message"}
+
+        # Process the message
+        response_text = process_message_sync(chat_id, message_body)
+
+        # Send reply via WAHA
+        await send_waha_message(chat_id, response_text, session)
+
+        return {"status": "ok", "chat_id": chat_id, "processed": True}
+
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":
