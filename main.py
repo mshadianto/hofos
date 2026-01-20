@@ -288,20 +288,37 @@ async def get_parts(category: str = None, stage: int = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def send_waha_message(chat_id: str, text: str, session: str = "hofos"):
+async def send_waha_message(chat_id: str, text: str, session: str = "default"):
     """Send message back via WAHA API"""
+    print(f"[WAHA] Sending message to {chat_id} via session {session}")
+    print(f"[WAHA] WAHA_URL: {WAHA_URL}, API_KEY set: {bool(WAHA_API_KEY)}")
+
     async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{WAHA_URL}/api/sendText",
-            headers={"X-Api-Key": WAHA_API_KEY},
-            json={
-                "session": session,
-                "chatId": chat_id,
-                "text": text
-            },
-            timeout=30.0
-        )
-        return response.json()
+        # Try the newer WAHA API endpoint first
+        send_url = f"{WAHA_URL}/api/sendText"
+        headers = {"X-Api-Key": WAHA_API_KEY}
+        payload = {
+            "session": session,
+            "chatId": chat_id,
+            "text": text
+        }
+
+        print(f"[WAHA] POST {send_url}")
+        print(f"[WAHA] Payload: {payload}")
+
+        try:
+            response = await client.post(
+                send_url,
+                headers=headers,
+                json=payload,
+                timeout=30.0
+            )
+            print(f"[WAHA] Response status: {response.status_code}")
+            print(f"[WAHA] Response body: {response.text}")
+            return response.json()
+        except Exception as e:
+            print(f"[WAHA] Error: {e}")
+            return {"error": str(e)}
 
 
 def process_message_sync(user_id: str, message: str) -> str:
@@ -336,37 +353,67 @@ async def waha_webhook(request: Request):
     """
     try:
         payload = await request.json()
+        print(f"[WEBHOOK] ====== NEW REQUEST ======")
+        print(f"[WEBHOOK] Full payload: {payload}")
 
-        # Check if it's a message event
-        event = payload.get("event")
-        if event != "message":
+        # Check if it's a message event (support multiple formats)
+        event = payload.get("event", "")
+        print(f"[WEBHOOK] Event type: {event}")
+
+        # Accept various message event types from WAHA
+        valid_events = ["message", "message.any", "message.received"]
+        if not any(event.startswith(e) for e in valid_events):
+            print(f"[WEBHOOK] Ignoring event: {event}")
             return {"status": "ignored", "reason": f"event type: {event}"}
 
-        # Extract message data
+        # Extract message data - handle different WAHA payload structures
         message_data = payload.get("payload", {})
-        chat_id = message_data.get("from")
-        message_body = message_data.get("body", "")
-        is_from_me = message_data.get("fromMe", False)
-        session = payload.get("session", "hofos")
+
+        # Try different field names for chat ID
+        chat_id = message_data.get("from") or message_data.get("chatId") or message_data.get("key", {}).get("remoteJid")
+
+        # Try different field names for message body
+        message_body = message_data.get("body") or message_data.get("text") or ""
+        if not message_body and "message" in message_data:
+            msg = message_data.get("message", {})
+            message_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text", "")
+
+        is_from_me = message_data.get("fromMe", False) or message_data.get("key", {}).get("fromMe", False)
+        session = payload.get("session", "default")
+
+        print(f"[WEBHOOK] Extracted - chat_id: {chat_id}, body: {message_body}, fromMe: {is_from_me}, session: {session}")
 
         # Skip messages from self
         if is_from_me:
+            print(f"[WEBHOOK] Skipping self message")
             return {"status": "ignored", "reason": "message from self"}
 
         # Skip empty messages
         if not message_body:
+            print(f"[WEBHOOK] Skipping empty message")
             return {"status": "ignored", "reason": "empty message"}
 
+        if not chat_id:
+            print(f"[WEBHOOK] No chat_id found")
+            return {"status": "error", "reason": "no chat_id"}
+
         # Process the message
+        print(f"[WEBHOOK] Processing message...")
         response_text = process_message_sync(chat_id, message_body)
+        print(f"[WEBHOOK] Response generated ({len(response_text)} chars): {response_text[:100]}...")
 
         # Send reply via WAHA
-        await send_waha_message(chat_id, response_text, session)
+        print(f"[WEBHOOK] Sending reply to WAHA...")
+        result = await send_waha_message(chat_id, response_text, session)
+        print(f"[WEBHOOK] WAHA send result: {result}")
+        print(f"[WEBHOOK] ====== REQUEST COMPLETE ======")
 
         return {"status": "ok", "chat_id": chat_id, "processed": True}
 
     except Exception as e:
-        print(f"Webhook error: {e}")
+        print(f"[WEBHOOK] ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 
