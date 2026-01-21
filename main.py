@@ -105,6 +105,7 @@ def detect_intent(message: str) -> str:
 def get_greeting_response() -> str:
     """Return welcome message"""
     return """🚗 *SELAMAT DATANG DI HONDA FREED SUPERCHATBOT!*
+_Developed by MS Hadianto #1347_
 
 Saya asisten AI khusus untuk Honda Freed GB3/GB4 (2008-2016).
 
