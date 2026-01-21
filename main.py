@@ -58,7 +58,7 @@ def detect_intent(message: str) -> str:
     message_lower = message.lower()
 
     # Greeting patterns
-    greeting_patterns = ["halo", "hai", "hi", "hello", "selamat", "pagi", "siang", "sore", "malam"]
+    greeting_patterns = ["halo", "helo", "hai", "hi", "hello", "selamat", "pagi", "siang", "sore", "malam"]
     if any(g in message_lower for g in greeting_patterns) and len(message_lower) < 30:
         return "greeting"
 
@@ -382,7 +382,7 @@ async def waha_webhook(request: Request):
             msg = message_data.get("message", {})
             message_body = msg.get("conversation") or msg.get("extendedTextMessage", {}).get("text", "")
 
-        is_from_me = message_data.get("fromMe", False) or message_data.get("key", {}).get("fromMe", False)
+        is_from_me = message_data.get("fromMe", False) or key_data.get("fromMe", False)
         session = payload.get("session", "default")
 
         print(f"[WEBHOOK] Extracted - chat_id: {chat_id}, body: {message_body}, fromMe: {is_from_me}, session: {session}")
