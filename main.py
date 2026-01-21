@@ -218,9 +218,10 @@ async def process_message(request: MessageRequest, authorization: str = Header(N
     Returns:
         MessageResponse with response text and detected intent
     """
-    # Validate authorization (optional for web frontend)
-    if API_SECRET and authorization and authorization != f"Bearer {API_SECRET}":
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    # Validate authorization (skip if no auth header provided - for web frontend)
+    if authorization is not None and authorization != "" and authorization != "Bearer ":
+        if API_SECRET and authorization != f"Bearer {API_SECRET}":
+            raise HTTPException(status_code=401, detail="Unauthorized")
 
     # Validate input
     if not request.message or not request.message.strip():
