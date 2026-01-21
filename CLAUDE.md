@@ -4,105 +4,100 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Honda Freed Superchatbot - an agentic RAG (Retrieval-Augmented Generation) system for the Honda Freed Indonesia community. Provides diagnostic reasoning, modification planning, workshop recommendations, and cost estimation via WhatsApp integration.
+Honda Freed Superchatbot - an agentic RAG system for the Honda Freed Indonesia community (GB3/GB4, 2008-2016). Provides diagnostic reasoning, modification planning, and cost estimation via WhatsApp.
 
 ## Tech Stack
 
-- **Backend**: Python/FastAPI with LangGraph + LangChain for agentic workflows
-- **Database**: Supabase (PostgreSQL with pgvector)
-- **LLM**: Groq API (llama-3.1-70b-versatile)
-- **Embeddings**: sentence-transformers (all-MiniLM-L6-v2, 384 dimensions)
-- **WhatsApp Integration**: WAHA (WhatsApp HTTP API)
-- **Webhook Proxy**: Cloudflare Worker (routes WhatsApp messages to Python backend)
+- **Backend**: Python/FastAPI + LangGraph for agentic workflows
+- **Database**: Supabase (PostgreSQL with pgvector, 384-dim embeddings)
+- **LLM**: Groq API (llama-3.3-70b-versatile)
+- **Embeddings**: sentence-transformers (all-MiniLM-L6-v2)
+- **WhatsApp**: WAHA (WhatsApp HTTP API)
 
-## Common Commands
+## Commands
 
 ```bash
-# Setup
+# Setup (Windows)
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env
 
-# Run development server
+# Run server
 uvicorn main:app --reload --port 8000
 
-# Run tests
+# Tests
 pytest
-
-# Run single test
 pytest tests/test_api.py::test_health -v
 
-# Seed database (requires Supabase connection)
+# Seed database
 python scripts/seed_data.py
 
 # Deploy Cloudflare Worker
-cd cloudflare-worker
-wrangler deploy
+cd cloudflare-worker && wrangler deploy
 ```
 
 ## Architecture
 
 ```
-main.py                         FastAPI app with intent detection and routing
-├── agents/
-│   ├── freed_diagnostic.py     LangGraph workflow: symptom extraction → vector search → LLM diagnosis
-│   └── freed_modification.py   LangGraph workflow: parse request → retrieve parts → generate plan
-├── database/
-│   ├── schema.sql              Supabase schema with pgvector, RPC functions
-│   └── supabase_client.py      Supabase connection singleton
-├── scripts/
-│   └── seed_data.py            Seeds: 16 service manual entries, 10 common issues, 54 mod parts
-├── cloudflare-worker/
-│   └── src/index.js            Webhook: WAHA → Python backend → WAHA
-└── tests/
-    └── test_api.py             FastAPI TestClient tests
+main.py                 → FastAPI app, intent detection, routing
+agents/
+  freed_diagnostic.py   → Diagnostic LangGraph workflow (entry: process_freed_message)
+  freed_modification.py → Modification LangGraph workflow (entry: process_modification_request)
+database/
+  schema.sql            → Supabase schema + RPC functions for vector search
+  supabase_client.py    → Supabase singleton
+cloudflare-worker/      → Legacy webhook proxy (Cloudflare Worker)
 ```
+
+## Intent Routing (main.py:46)
+
+`detect_intent()` matches keywords to route messages:
+- `greeting` → static welcome message
+- `help` → static help text
+- `bengkel` → workshop search (placeholder)
+- `modification`/`stage` → freed_modification agent
+- `diagnostic` (default) → freed_diagnostic agent
 
 ## Agent Workflows
 
-### Diagnostic Agent (freed_diagnostic.py)
+**Diagnostic** (`agents/freed_diagnostic.py`):
 ```
 extract_symptoms → retrieve_service_docs → retrieve_common_issues → generate_diagnosis → format_response
 ```
-- Uses vector similarity search on `freed_service_manuals` and `freed_common_issues` tables
-- LLM generates diagnosis with confidence levels, part recommendations, cost estimates
+- Vector search via `match_service_manuals()` and `match_common_issues()` RPC functions
+- Entry point: `process_freed_message(user_id, message)`
 
-### Modification Agent (freed_modification.py)
+**Modification** (`agents/freed_modification.py`):
 ```
 parse_request → retrieve_stage_preset → retrieve_parts → generate_modification_plan → calculate_total_cost → format_response
 ```
-- Supports Stage 1/2/3 presets with predefined part lists
-- Filters parts by category, stage, and budget
-- Calculates total cost including installation estimates
+- Queries `stage_presets` and `modification_catalog` tables
+- Entry point: `process_modification_request(user_id, message)`
 
-## Database Schema (key tables)
+## Vector Search RPC Functions (database/schema.sql)
 
-- `freed_service_manuals`: Service manual content with embeddings (vector search)
-- `freed_common_issues`: Common problems with symptoms, causes, costs (vector search)
-- `modification_catalog`: 54 parts across engine, suspension, brakes, wheels, interior, exterior
-- `stage_presets`: Stage 1/2/3 modification packages with target HP and budget ranges
+```sql
+match_service_manuals(query_embedding vector(384), match_threshold float, match_count int)
+match_common_issues(query_embedding vector(384), match_threshold float, match_count int)
+```
+Both use cosine similarity with default threshold 0.5.
 
-## Request Flow
+## Webhook Integration
 
-1. WhatsApp message → WAHA webhook → Cloudflare Worker
-2. Worker calls `/process` endpoint with Bearer auth
-3. `detect_intent()` routes to: greeting, help, bengkel, modification, or diagnostic
-4. Agent executes LangGraph workflow with RAG retrieval
-5. Response sent back through Worker → WAHA → WhatsApp
+**Direct webhook (preferred)**: POST `/webhook`
+- Receives WAHA payload, extracts `chatId` from `payload._data.key.remoteJidAlt`
+- Calls `process_message_sync()`, sends reply via `send_waha_message()`
+
+**Via Cloudflare Worker (legacy)**: POST `/process`
+- Requires `Authorization: Bearer {API_SECRET}` header
+- Worker handles WAHA send
 
 ## Environment Variables
 
-Required in `.env`:
-- `SUPABASE_URL`, `SUPABASE_KEY` - Database + vector search
-- `GROQ_API_KEY` - LLM provider
-- `WAHA_URL`, `WAHA_API_KEY` - WhatsApp API
-- `API_SECRET` - Bearer token for /process endpoint auth
-
-## API Endpoints
-
-- `GET /` - API info
-- `GET /health` - Health check
-- `POST /process` - Main message processing (requires Bearer auth)
-- `GET /stages` - Get modification stage presets
-- `GET /parts?category=engine&stage=1` - Query parts catalog
+```
+SUPABASE_URL, SUPABASE_KEY  # Database + vector search
+GROQ_API_KEY                # LLM provider
+WAHA_URL, WAHA_API_KEY      # WhatsApp API
+API_SECRET                  # Bearer auth for /process
+```
