@@ -38,6 +38,12 @@ class MessageRequest(BaseModel):
     message: str
 
 
+class ImageRequest(BaseModel):
+    user_id: str
+    message: str = ""
+    image_base64: str
+
+
 class MessageResponse(BaseModel):
     response: str
     intent: str
@@ -258,6 +264,46 @@ Atau ketik *HELP* untuk melihat panduan penggunaan.
         intent = "error"
 
     return MessageResponse(response=response, intent=intent)
+
+
+@app.post("/process-image", response_model=MessageResponse)
+async def process_image(request: ImageRequest, authorization: str = Header(None)):
+    """
+    Process image with vision model for car diagnostics
+
+    Args:
+        request: ImageRequest with user_id, message, and image_base64
+        authorization: Bearer token for authentication
+
+    Returns:
+        MessageResponse with diagnosis based on image
+    """
+    # Validate authorization (allow empty for web frontend)
+    if API_SECRET and authorization and authorization != f"Bearer {API_SECRET}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if not request.image_base64:
+        return MessageResponse(
+            response="Silakan kirim gambar untuk diagnosa.",
+            intent="empty"
+        )
+
+    try:
+        from agents.freed_vision import process_image_diagnosis
+        response = process_image_diagnosis(
+            request.user_id,
+            request.message or "Tolong diagnosa masalah dari gambar ini",
+            request.image_base64
+        )
+        return MessageResponse(response=response, intent="vision_diagnostic")
+    except Exception as e:
+        print(f"[VISION] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return MessageResponse(
+            response=f"⚠️ *TERJADI KESALAHAN*\n\nMaaf, gagal memproses gambar.\nError: {str(e)[:100]}\n\nCoba kirim ulang atau ketik keluhan Anda.",
+            intent="error"
+        )
 
 
 @app.get("/stages")
